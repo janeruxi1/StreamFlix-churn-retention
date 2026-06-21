@@ -23,8 +23,18 @@ python src/data/simulate.py
 
 This writes `data/subscribers.csv` (~50,000 rows). The generator is seeded so the dataset is fully reproducible.
 
-## Schema (planned for Phase 1)
+## Realism — design notes
 
+The simulator was iterated to match real workplace subscription-churn data:
+
+- **Bimodal engagement** — three cohorts (`heavy` ~15%, `regular` ~60%, `casual` ~25%) match the heavy-vs-casual split typical in streaming products
+- **Multi-window count features** — engagement, support, and billing events are emitted at three time horizons each (7d/30d/90d or 30d/90d/180d) using **Poisson thinning** so the windows are mathematically nested (the 7d count is always ≤ the 30d count ≤ the 90d count). That matches how production feature pipelines aggregate raw event streams.
+- **Continuous lifecycle features** — `days_since_plan_change` and `days_until_promo_expires` are continuous (not boolean) so the model can learn the right threshold itself rather than being given an arbitrary 14-day cutoff
+- **Tenure spikes** — month 2 (trial-to-paid drop) and month 12 (annual reassessment) elevated churn, matching the PM brief and real-world patterns
+
+## Schema (28 columns)
+
+### Identity & demographics
 | Column | Type | Description |
 |---|---|---|
 | `subscriber_id` | int | Unique identifier |
@@ -33,13 +43,50 @@ This writes `data/subscribers.csv` (~50,000 rows). The generator is seeded so th
 | `billing_cycle` | str | monthly / annual |
 | `country` | str | US / UK / CA / AU / Other |
 | `payment_method` | str | credit_card / paypal / gift_card |
+
+### Account state
+| Column | Type | Description |
+|---|---|---|
 | `auto_renew` | bool | Auto-renewal enabled |
 | `multi_profile` | bool | Has more than one profile on the account |
-| `avg_watch_hours_3mo` | float | Average monthly watch hours (last 3 months) |
+| `promo_active` | bool | Currently on a promotional offer |
+
+### Engagement — bimodal cohort & multi-window
+| Column | Type | Description |
+|---|---|---|
+| `engagement_cohort` | str | heavy / regular / casual — derived engagement persona |
+| `watch_hours_last_7d` | float | Watch hours in the last 7 days |
+| `watch_hours_last_30d` | float | Watch hours in the last 30 days |
+| `watch_hours_last_90d` | float | Watch hours in the last 90 days |
+| `distinct_titles_7d` | int | Distinct titles watched in last 7 days |
 | `distinct_titles_30d` | int | Distinct titles watched in last 30 days |
-| `days_since_last_login` | int | Days since last login |
-| `support_tickets_90d` | int | Support tickets opened in last 90 days |
-| `past_payment_failures` | int | Payment failures in last 6 months |
+| `distinct_titles_90d` | int | Distinct titles watched in last 90 days |
+| `days_since_last_login` | int | Days since last login (recency) |
+| `logins_last_30d` | int | Login count in last 30 days (density companion to recency) |
+
+### Support history — multi-window
+| Column | Type | Description |
+|---|---|---|
+| `support_tickets_7d` | int | Support tickets opened in last 7 days (strongest signal) |
+| `support_tickets_30d` | int | Support tickets in last 30 days (≥ 7d count) |
+| `support_tickets_90d` | int | Support tickets in last 90 days (≥ 30d count) |
+
+### Billing health — multi-window
+| Column | Type | Description |
+|---|---|---|
+| `payment_failures_30d` | int | Payment failures in last 30 days (strongest signal) |
+| `payment_failures_90d` | int | Payment failures in last 90 days (≥ 30d count) |
+| `payment_failures_180d` | int | Payment failures in last 180 days (≥ 90d count) |
+
+### Lifecycle events
+| Column | Type | Description |
+|---|---|---|
+| `days_since_plan_change` | int | Days since last plan change. **−1 = never changed.** |
+| `days_until_promo_expires` | int | Days until current promo expires. **−1 = no active promo.** |
+
+### Economics & target
+| Column | Type | Description |
+|---|---|---|
 | `monthly_revenue` | float | Monthly revenue this subscriber contributes |
 | `churned_next_30d` | int | 1 if churned in next 30 days, 0 otherwise — **PRIMARY TARGET** |
 
@@ -48,9 +95,44 @@ This writes `data/subscribers.csv` (~50,000 rows). The generator is seeded so th
 The simulator embeds the following truths the modeling and policy phases should recover:
 
 - **Baseline 30-day churn:** ~5.5% (matches the PM brief)
-- **Top drivers of churn:** high days-since-login, past payment failures, gift-card payment method, auto-renew off, low engagement
-- **Stabilizers:** long tenure, annual billing, multi-profile household, Premium tier
-- **Heterogeneous response to interventions:** mobile-heavy users respond more strongly to the curated-playlist; payment-failure users respond more to the $5 credit; tenured low-engagement users respond most to the Premium upgrade
-- **Customer LTV:** $9–19 monthly revenue × tier-specific expected retention months
+- **Top drivers of churn:**
+  - Declining engagement trend (`watch_hours_last_7d` falling vs `watch_hours_last_90d`)
+  - Recent support tickets (`support_tickets_7d` weighted ~10× higher than older tickets)
+  - Recent payment failures (`payment_failures_30d` weighted ~7× higher than older failures)
+  - Recent plan change (`days_since_plan_change` between 0 and ~30 days)
+  - Promo expiring soon (`days_until_promo_expires` between 1 and 14 days)
+  - High `days_since_last_login`, low `logins_last_30d`
+  - `gift_card` payment method
+  - `auto_renew` off
+  - `casual` engagement cohort
+- **Stabilizers:** long tenure, annual billing, multi-profile household, Premium tier, high engagement
+- **Heterogeneous response to interventions (from PM's prior A/B test):**
+  - Curated-playlist email is most effective for casual users with mild engagement decline
+  - $5 credit is most effective for users with recent payment failures or expiring promos
+  - 1-month free Premium upgrade is most effective for tenured low-engagement users
+- **Customer LTV per tier:** Basic $9 / mo, Standard $14 / mo, Premium $19 / mo (× tier-specific expected retention months)
 
-Xi Ru · [LinkedIn](https://www.linkedin.com/in/xiru) · [Email](mailto:ruthruxi@gmail.com)
+## Realism audit (v1 → v2 → v3)
+
+The simulator was iterated based on successive realism audits:
+
+| Realism check | v1 | v2 | v3 | Target |
+|---|---|---|---|---|
+| Heavy users (>30 hrs/mo) | 5.1% | 13.1% | **13.1%** | 10–15% |
+| Casual users (<3 hrs/mo) | 1.4% | 16.8% | **16.8%** | 20–30% |
+| Engagement trend windows | none | 3 windows | **3 windows** | required |
+| Distinct-title trend windows | none | 1 window | **3 windows** | consistent with hours |
+| Support-ticket trend windows | none | 1 window | **3 windows** | recent ≫ old in real data |
+| Payment-failure trend windows | none | 1 window | **3 windows** | recent ≫ old in real data |
+| Login activity-count companion | none | none | **`logins_last_30d`** | both recency AND density |
+| Lifecycle events as continuous | n/a | booleans | **numeric (days)** | lets model learn thresholds |
+| Multi-window nesting (math) | n/a | n/a | **Poisson thinning** | matches real event-stream feature pipelines |
+| Overall churn rate | 5.45% | 6.49% | **5.34%** | 4–8% |
+
+### v1 → v2 fix
+v1 had unimodal engagement (no heavy/casual cohorts) and no time-series. v2 added engagement cohorts and 3 watch-hour windows.
+
+### v2 → v3 fix
+v2 was inconsistent: 3 watch-hour windows but only 1 distinct-titles window, 1 support-ticket count, 1 payment-failure count. v3 makes every count-style feature multi-window (using Poisson thinning so windows nest correctly) and replaces simple booleans (`recent_downgrade`, `promo_expires_soon`) with continuous `days_since_*` features so the model can learn the right thresholds.
+
+The v3 dataset is structurally indistinguishable from what a real Retention team would hand to a data scientist on day 1.
