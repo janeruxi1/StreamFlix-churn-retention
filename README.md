@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-> **Cost-aware customer-retention system** for a fictional streaming subscription business. End-to-end: from a calibrated churn-probability model to an ROI-optimized intervention policy and a deployed decision-support tool. Sister project to [`01-ab-test-analysis`](../01-ab-test-analysis), built on the same StreamFlix context.
+> **Cost-aware customer-retention system** for a fictional streaming subscription business. End-to-end: from a calibrated churn-probability model to an ROI-optimized intervention policy and a deployed decision-support tool. Sister project to [`StreamFlix-AB-Testing`](../StreamFlix-AB-Testing), built on the same StreamFlix context.
 
 ---
 
