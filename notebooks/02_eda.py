@@ -9,7 +9,9 @@ cost-aware decision rule downstream.
 Sections:
     A. Population overview          -- who is in the dataset
     B. Churn rates by categorical segment
-    C. Kaplan-Meier survival curves -- overall + by plan + by billing
+    C. Kaplan-Meier survival curves -- structural covariates (5 strata)
+    C2. Landmark analysis           -- engagement_cohort (time-varying)
+    C3. Sensitivity check           -- landmark robustness
     D. Hazard by tenure month       -- m2 / m12 spike visualization
     E. Engagement-trend distribution -- churners vs. non-churners
     F. Tenure x cohort heatmap      -- 2D segment view
@@ -91,7 +93,6 @@ plt.tight_layout()
 plt.savefig(FIG_DIR / "02_churn_by_segment.png", dpi=140, bbox_inches="tight")
 print(f"Saved -> {FIG_DIR}/02_churn_by_segment.png")
 
-# Print the segments that are >= 1.5x the baseline (high-risk)
 print(f"\nOverall churn rate: {overall_rate:.2%}")
 print("Segments with churn rate >= 1.5x baseline:")
 for col in seg_cols:
@@ -102,11 +103,16 @@ for col in seg_cols:
 
 
 # =====================================================================
-# C. Kaplan-Meier survival curves
+# C. Kaplan-Meier survival curves -- structural covariates
 # =====================================================================
 print("\n" + "=" * 70)
-print("C. KAPLAN-MEIER SURVIVAL CURVES")
+print("C. KAPLAN-MEIER SURVIVAL CURVES (structural covariates)")
 print("=" * 70)
+# Stratify on covariates that are SET AT OR NEAR SIGNUP and stable over
+# time (plan_tier, billing_cycle, payment_method, auto_renew). KM's
+# 'covariate fixed at t=0' assumption holds for these. Time-varying
+# covariates (engagement_cohort) are handled separately in C2 with
+# landmark analysis.
 
 
 def km(durations: np.ndarray, events: np.ndarray) -> pd.DataFrame:
@@ -130,21 +136,24 @@ def km(durations: np.ndarray, events: np.ndarray) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["t", "S", "at_risk", "events"])
 
 
-# Overall + by plan + by billing
-fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+# Single 5-panel figure: overall + 4 structural covariates
+fig, axes = plt.subplots(2, 3, figsize=(16, 9))
+axes = axes.flatten()
 
+# Panel 1: overall
 ax = axes[0]
 overall = km(df["tenure_months"], df["churned_next_30d"])
 ax.step(overall["t"], overall["S"], where="post", color="#5B8FF9", linewidth=2)
-ax.set_title("Overall survival (S(t))", fontweight="bold")
+ax.set_title("Overall survival S(t)", fontweight="bold")
 ax.set_xlabel("tenure (months)")
 ax.set_ylabel("P(still subscribed)")
 ax.set_ylim(0.5, 1.01)
 ax.grid(True, linestyle="--", alpha=0.4)
 
+# Panel 2: plan tier
 ax = axes[1]
-plan_colors = {"Basic": "#F6735B", "Standard": "#F6BD16", "Premium": "#5AD8A6"}
-for plan, color in plan_colors.items():
+for plan, color in {"Basic": "#F6735B", "Standard": "#F6BD16",
+                    "Premium": "#5AD8A6"}.items():
     sub = df[df["plan_tier"] == plan]
     curve = km(sub["tenure_months"], sub["churned_next_30d"])
     ax.step(curve["t"], curve["S"], where="post", color=color, linewidth=2,
@@ -155,9 +164,9 @@ ax.set_ylim(0.5, 1.01)
 ax.legend(fontsize=9)
 ax.grid(True, linestyle="--", alpha=0.4)
 
+# Panel 3: billing cycle
 ax = axes[2]
-bill_colors = {"monthly": "#F6735B", "annual": "#5AD8A6"}
-for billing, color in bill_colors.items():
+for billing, color in {"monthly": "#F6735B", "annual": "#5AD8A6"}.items():
     sub = df[df["billing_cycle"] == billing]
     curve = km(sub["tenure_months"], sub["churned_next_30d"])
     ax.step(curve["t"], curve["S"], where="post", color=color, linewidth=2,
@@ -168,10 +177,196 @@ ax.set_ylim(0.5, 1.01)
 ax.legend(fontsize=9)
 ax.grid(True, linestyle="--", alpha=0.4)
 
-plt.suptitle("Kaplan-Meier Survival Curves", fontsize=13, fontweight="bold")
+# Panel 4: auto-renew
+ax = axes[3]
+for ar, color, label in [(True, "#5AD8A6", "auto-renew ON"),
+                          (False, "#F6735B", "auto-renew OFF")]:
+    sub = df[df["auto_renew"] == ar]
+    curve = km(sub["tenure_months"], sub["churned_next_30d"])
+    ax.step(curve["t"], curve["S"], where="post", color=color, linewidth=2,
+            label=f"{label} (n={len(sub):,})")
+ax.set_title("Survival by auto-renew status", fontweight="bold")
+ax.set_xlabel("tenure (months)")
+ax.set_ylabel("P(still subscribed)")
+ax.set_ylim(0.5, 1.01)
+ax.legend(fontsize=9)
+ax.grid(True, linestyle="--", alpha=0.4)
+
+# Panel 5: payment method
+ax = axes[4]
+pm_colors = {"credit_card": "#5AD8A6", "paypal": "#5B8FF9",
+             "gift_card": "#F6735B"}
+for pm, color in pm_colors.items():
+    sub = df[df["payment_method"] == pm]
+    if len(sub) == 0:
+        continue
+    curve = km(sub["tenure_months"], sub["churned_next_30d"])
+    ax.step(curve["t"], curve["S"], where="post", color=color, linewidth=2,
+            label=f"{pm} (n={len(sub):,})")
+ax.set_title("Survival by payment method", fontweight="bold")
+ax.set_xlabel("tenure (months)")
+ax.set_ylim(0.5, 1.01)
+ax.legend(fontsize=9)
+ax.grid(True, linestyle="--", alpha=0.4)
+
+# Hide the 6th (empty) panel
+axes[5].set_visible(False)
+
+plt.suptitle("Kaplan-Meier survival curves -- structural covariates",
+             fontsize=13, fontweight="bold")
 plt.tight_layout()
 plt.savefig(FIG_DIR / "02_kaplan_meier.png", dpi=140, bbox_inches="tight")
 print(f"Saved -> {FIG_DIR}/02_kaplan_meier.png")
+
+# Numerical readout for auto_renew and payment_method (smallest n cohorts)
+for col in ["auto_renew", "payment_method"]:
+    print(f"\nChurn rate by {col}:")
+    print(df.groupby(col)["churned_next_30d"].agg(["mean", "count"]).round(4))
+
+
+# =====================================================================
+# C2. Landmark analysis: engagement_cohort (time-varying covariate)
+# =====================================================================
+print("\n" + "=" * 70)
+print("C2. LANDMARK ANALYSIS -- engagement_cohort")
+print("=" * 70)
+# engagement_cohort is a TIME-VARYING covariate: a user labeled 'casual'
+# at month 3 might be 'heavy' at month 12. Naive KM stratification by
+# current cohort suffers from immortal-time bias -- the heavy cohort is
+# enriched with users who survived long enough to BECOME heavy.
+#
+# Landmark analysis fixes this by:
+#   1. Conditioning on survival to a landmark time t*
+#   2. Stratifying by covariate value at t*
+#   3. Computing survival forward from t*
+#
+# In our cross-sectional snapshot we observe cohort once -- so the
+# landmark approximation is "restrict to users who survived to t*=6"
+# (i.e. users whose cohort label is more stable / less affected by
+# survival selection).
+
+LANDMARK = 6
+established = df[df["tenure_months"] >= LANDMARK].copy()
+print(f"\nLandmark t* = {LANDMARK} months")
+print(f"Full sample:        n={len(df):,}")
+print(f"Landmark-restricted: n={len(established):,} "
+      f"({len(established)/len(df):.1%})")
+
+fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+cohort_colors = {"heavy": "#5AD8A6", "regular": "#5B8FF9",
+                 "casual": "#F6735B"}
+
+ax = axes[0]
+for cohort, color in cohort_colors.items():
+    sub = df[df["engagement_cohort"] == cohort]
+    curve = km(sub["tenure_months"], sub["churned_next_30d"])
+    ax.step(curve["t"], curve["S"], where="post", color=color, linewidth=2,
+            label=f"{cohort} (n={len(sub):,})")
+ax.set_title("Naive KM by current cohort\n"
+             "(biased -- cohort label is time-varying)",
+             fontweight="bold", fontsize=10)
+ax.set_xlabel("tenure (months)")
+ax.set_ylabel("P(still subscribed)")
+ax.set_ylim(0.5, 1.01)
+ax.legend(fontsize=9)
+ax.grid(True, linestyle="--", alpha=0.4)
+
+ax = axes[1]
+for cohort, color in cohort_colors.items():
+    sub = established[established["engagement_cohort"] == cohort]
+    if len(sub) == 0:
+        continue
+    curve = km(sub["tenure_months"], sub["churned_next_30d"])
+    ax.step(curve["t"], curve["S"], where="post", color=color, linewidth=2,
+            label=f"{cohort} (n={len(sub):,})")
+ax.axvline(LANDMARK, color="black", linestyle=":", linewidth=1.5,
+           alpha=0.6, label=f"landmark t*={LANDMARK}")
+ax.set_title(f"Landmark KM by cohort\n"
+             f"(conditioned on survival to month {LANDMARK})",
+             fontweight="bold", fontsize=10)
+ax.set_xlabel("tenure (months)")
+ax.set_ylim(0.5, 1.01)
+ax.legend(fontsize=9)
+ax.grid(True, linestyle="--", alpha=0.4)
+
+plt.suptitle("Engagement cohort survival -- naive vs landmark "
+             "(handling time-varying covariates)",
+             fontsize=12, fontweight="bold")
+plt.tight_layout()
+plt.savefig(FIG_DIR / "02_km_cohort_landmark.png",
+            dpi=140, bbox_inches="tight")
+print(f"Saved -> {FIG_DIR}/02_km_cohort_landmark.png")
+
+print("\nChurn-rate comparison: naive (all users) vs landmark (tenure>=6):")
+naive = df.groupby("engagement_cohort")["churned_next_30d"].mean()
+landmark = established.groupby("engagement_cohort")["churned_next_30d"].mean()
+comp = pd.DataFrame({"naive": naive, "landmark": landmark}).round(4) * 100
+comp["delta_pp"] = (comp["landmark"] - comp["naive"]).round(2)
+print(comp)
+
+
+# =====================================================================
+# C3. Sensitivity check: does the cohort gap survive across t* choices?
+# =====================================================================
+print("\n" + "=" * 70)
+print("C3. SENSITIVITY CHECK -- landmark robustness")
+print("=" * 70)
+# A single landmark choice is a judgment call. Sweep across plausible
+# values and check whether the cohort gap survives at every choice.
+
+landmark_values = [2, 4, 6, 9, 12]
+rows = []
+for t_star in landmark_values:
+    sub = df[df["tenure_months"] >= t_star]
+    n_kept = len(sub)
+    pct_kept = n_kept / len(df)
+    by_cohort = sub.groupby("engagement_cohort")["churned_next_30d"].mean()
+    casual_rate = by_cohort.get("casual", np.nan)
+    heavy_rate = by_cohort.get("heavy", np.nan)
+    gap_pp = (casual_rate - heavy_rate) * 100
+    rows.append({
+        "t_star": t_star,
+        "n_kept": n_kept,
+        "pct_kept": round(pct_kept * 100, 1),
+        "casual_pct": round(casual_rate * 100, 2),
+        "heavy_pct": round(heavy_rate * 100, 2),
+        "gap_pp": round(gap_pp, 2),
+    })
+sensitivity = pd.DataFrame(rows)
+print("\nCasual-vs-heavy churn gap across landmark choices:")
+print(sensitivity.to_string(index=False))
+
+fig, ax1 = plt.subplots(figsize=(10, 5))
+
+color_gap = "#5B8FF9"
+ax1.plot(sensitivity["t_star"], sensitivity["gap_pp"],
+         marker="o", markersize=10, linewidth=2.5, color=color_gap,
+         label="casual - heavy gap (pp)", zorder=3)
+ax1.axhline(0, color="gray", linestyle=":", linewidth=1)
+ax1.axvline(6, color="#F6AD55", linestyle="--", linewidth=1.5,
+            alpha=0.7, label="chosen t*=6")
+ax1.set_xlabel("landmark t* (months)")
+ax1.set_ylabel("casual - heavy churn gap (pp)", color=color_gap)
+ax1.tick_params(axis="y", labelcolor=color_gap)
+ax1.set_ylim(0, sensitivity["gap_pp"].max() * 1.25)
+ax1.grid(True, linestyle="--", alpha=0.4)
+
+ax2 = ax1.twinx()
+color_size = "#F6735B"
+ax2.bar(sensitivity["t_star"], sensitivity["pct_kept"], alpha=0.25,
+        color=color_size, width=0.8, label="% sample retained", zorder=1)
+ax2.set_ylabel("% sample retained", color=color_size)
+ax2.tick_params(axis="y", labelcolor=color_size)
+ax2.set_ylim(0, 100)
+
+plt.title("Landmark sensitivity: cohort gap is robust; sample shrinks fast",
+          fontweight="bold")
+ax1.legend(loc="upper left")
+ax2.legend(loc="upper right")
+plt.tight_layout()
+plt.savefig(FIG_DIR / "02_landmark_sensitivity.png",
+            dpi=140, bbox_inches="tight")
+print(f"\nSaved -> {FIG_DIR}/02_landmark_sensitivity.png")
 
 
 # =====================================================================
@@ -216,14 +411,12 @@ print("\n" + "=" * 70)
 print("E. ENGAGEMENT TREND -- churners vs non-churners")
 print("=" * 70)
 
-# Trend ratio: scale watch_hours_last_7d up to a 30-day equivalent (× 30/7)
-# then divide by watch_hours_last_30d. Values < 1 = declining; >1 = growing.
 df["watch_trend_7d_to_30d"] = (
     df["watch_hours_last_7d"] * (30 / 7) /
     df["watch_hours_last_30d"].clip(lower=0.1)
 ).clip(upper=3.0)
 
-print("\nTrend ratio statistics (watch_hours_7d × 30/7 / watch_hours_30d):")
+print("\nTrend ratio statistics (watch_hours_7d x 30/7 / watch_hours_30d):")
 print(df.groupby("churned_next_30d")["watch_trend_7d_to_30d"]
         .describe(percentiles=[0.25, 0.5, 0.75]).round(3))
 
@@ -275,7 +468,7 @@ ax.set_yticks(range(len(heatmap.index)))
 ax.set_yticklabels(heatmap.index)
 ax.set_xlabel("engagement cohort")
 ax.set_ylabel("tenure bucket")
-ax.set_title("Churn rate (%) by tenure × engagement cohort",
+ax.set_title("Churn rate (%) by tenure x engagement cohort",
              fontweight="bold")
 for i in range(heatmap.shape[0]):
     for j in range(heatmap.shape[1]):
@@ -297,7 +490,6 @@ print("\n" + "=" * 70)
 print("G. PHASE 2 VERDICT")
 print("=" * 70)
 
-# Key findings summary
 trend_decline = (df.loc[df["churned_next_30d"] == 1, "watch_trend_7d_to_30d"]
                    .median())
 trend_stable = (df.loc[df["churned_next_30d"] == 0, "watch_trend_7d_to_30d"]
@@ -306,13 +498,13 @@ spread_pp = (
     df.groupby("plan_tier")["churned_next_30d"].mean().max() -
     df.groupby("plan_tier")["churned_next_30d"].mean().min()
 ) * 100
-mobile_signal = heatmap.loc["m2 (trial)", "casual"] - heatmap.loc["m25+", "heavy"]
+heatmap_gap = heatmap.loc["m2 (trial)", "casual"] - heatmap.loc["m25+", "heavy"]
 
 print(f"\nKey patterns for Phase 3 feature engineering:")
 print(f"  - Plan tier spread:        {spread_pp:.2f}pp churn-rate difference")
 print(f"  - Engagement trend median: churners {trend_decline:.3f} vs "
       f"non-churners {trend_stable:.3f}  (<1 = declining)")
-print(f"  - Tenure × cohort max gap: m2 casual ({heatmap.loc['m2 (trial)', 'casual']*100:.1f}%) "
+print(f"  - Tenure x cohort max gap: m2 casual ({heatmap.loc['m2 (trial)', 'casual']*100:.1f}%) "
       f"vs m25+ heavy ({heatmap.loc['m25+', 'heavy']*100:.1f}%) "
-      f"= {mobile_signal*100:.1f}pp spread")
+      f"= {heatmap_gap*100:.1f}pp spread")
 print(f"\nReady for Phase 3 (feature engineering).")
