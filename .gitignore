@@ -32,3 +32,7 @@ Thumbs.db
 
 # Private notes (not pushed to GitHub)
 reports/interview_qa.md
+
+# Trained model artifacts (regenerable from notebooks/04_modeling.py)
+models/*.pkl
+

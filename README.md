@@ -113,11 +113,11 @@ streamlit run app/streamlit_app.py           # launch the decision-support app
 
 The project is built in 9 phases that mirror an end-to-end retention modeling workflow:
 
-1. 🚧 **Phase 0:** Project setup, PM brief, metric framework
-2. ⬜ **Phase 1:** Synthetic dataset generator
-3. ⬜ **Phase 2:** EDA + survival analysis
-4. ⬜ **Phase 3:** Feature engineering
-5. ⬜ **Phase 4:** Modeling — LR baseline → XGBoost + calibration
+1. ✅ **Phase 0:** Project setup, PM brief, metric framework
+2. ✅ **Phase 1:** Synthetic dataset generator + data audit
+3. ✅ **Phase 2:** EDA + survival analysis (KM, landmark analysis, sensitivity)
+4. ✅ **Phase 3:** Feature engineering
+5. ✅ **Phase 4:** Modeling — LR baseline → XGBoost + calibration
 6. ⬜ **Phase 5:** SHAP — actionable retention levers
 7. ⬜ **Phase 6:** Cost-aware decision rule + ROI sweep
 8. ⬜ **Phase 7:** Decision memo + Streamlit decision-support app
